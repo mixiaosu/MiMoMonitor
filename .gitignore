@@ -1,0 +1,29 @@
+# 依赖
+node_modules/
+target/
+dist/
+
+# 构建产物
+*.pdb
+*.msi
+*.dmg
+*.deb
+*.AppImage
+
+# 环境
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rust
+**/*.rs.bk
+debug/
