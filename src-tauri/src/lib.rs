@@ -286,55 +286,38 @@ pub fn run() {
 
         let client = reqwest::Client::new();
 
-        // 先探测是 PAYG 还是 Token Plan
-        let payg_url = "https://api.xiaomimimo.com/v1/user/balance";
-        let tp_url = "https://token-plan-sgp.xiaomimimo.com/v1/user/balance";
+        // 自动探测 base URL：用 /models 端点挨个测试，命中 200 即确认区域和账号类型
+        let bases = [
+            "https://token-plan-cn.xiaomimimo.com/v1",
+            "https://token-plan-sgp.xiaomimimo.com/v1",
+            "https://token-plan-ams.xiaomimimo.com/v1",
+            "https://api.xiaomimimo.com/v1",
+        ];
 
-        // 尝试 Token Plan 端点
-        if let Ok(resp) = client
-            .get(tp_url)
-            .bearer_auth(&api_key)
-            .timeout(Duration::from_secs(15))
-            .send()
-            .await
-        {
-            if resp.status().as_u16() == 200 {
-                #[derive(Deserialize)]
-                struct TpBalanceData {
-                    token_balance: Option<f64>,
-                    token_limit: Option<f64>,
-                    plan_name: Option<String>,
+        let mut detected_base: Option<&str> = None;
+        for base in &bases {
+            match client
+                .get(format!("{base}/models"))
+                .bearer_auth(&api_key)
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().as_u16() == 200 => {
+                    detected_base = Some(base);
+                    break;
                 }
-                #[derive(Deserialize)]
-                struct TpBalanceResp {
-                    data: Option<TpBalanceData>,
-                }
-
-                if let Ok(data) = resp.json::<TpBalanceResp>().await {
-                    if let Some(d) = data.data {
-                        let used = match (d.token_balance, d.token_limit) {
-                            (Some(bal), Some(lim)) if lim > 0.0 => Some(lim - bal),
-                            _ => None,
-                        };
-                        return Ok(BalanceResult {
-                            account_type: "token_plan".to_string(),
-                            plan_name: d.plan_name,
-                            total_balance: None,
-                            charge_balance: None,
-                            granted_balance: None,
-                            currency: None,
-                            token_balance: d.token_balance,
-                            token_limit: d.token_limit,
-                            token_used: used,
-                        });
-                    }
-                }
+                _ => continue,
             }
         }
 
-        // 尝试 PAYG 端点
+        let base = detected_base.ok_or_else(|| {
+            "无法连接到 MiMo API，请检查网络和 API Key".to_string()
+        })?;
+
+        let balance_url = format!("{base}/user/balance");
         let resp = client
-            .get(payg_url)
+            .get(&balance_url)
             .bearer_auth(&api_key)
             .timeout(Duration::from_secs(15))
             .send()
@@ -349,37 +332,61 @@ pub fn run() {
             code => return Err(format!("请求失败：HTTP {code}")),
         }
 
-        #[derive(Deserialize)]
-        struct PaygBalanceData {
-            balance: Option<String>,
-            charge_balance: Option<String>,
-            granted_balance: Option<String>,
-            currency: Option<String>,
-        }
-        #[derive(Deserialize)]
-        struct PaygBalanceResp {
-            data: Option<PaygBalanceData>,
-        }
-
-        let data: PaygBalanceResp = resp
+        // 用 serde_json::Value 通用解析，根据字段判断 PAYG / Token Plan
+        let body: serde_json::Value = resp
             .json()
             .await
             .map_err(|error| format!("解析余额数据失败：{error}"))?;
 
-        if let Some(d) = data.data {
+        let data = body
+            .get("data")
+            .ok_or_else(|| "余额数据为空".to_string())?;
+
+        // Token Plan 响应包含 token_balance / token_limit
+        if data.get("token_balance").or(data.get("token_limit")).is_some() {
+            let token_balance = data.get("token_balance").and_then(|v| v.as_f64());
+            let token_limit = data.get("token_limit").and_then(|v| v.as_f64());
+            let plan_name = data
+                .get("plan_name")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            let used = match (token_balance, token_limit) {
+                (Some(bal), Some(lim)) if lim > 0.0 => Some(lim - bal),
+                _ => None,
+            };
+            return Ok(BalanceResult {
+                account_type: "token_plan".to_string(),
+                plan_name,
+                total_balance: None,
+                charge_balance: None,
+                granted_balance: None,
+                currency: None,
+                token_balance,
+                token_limit,
+                token_used: used,
+            });
+        }
+
+        // PAYG 响应包含 balance / charge_balance / granted_balance
+        let total_balance = data.get("balance").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let charge_balance = data.get("charge_balance").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let granted_balance = data.get("granted_balance").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let currency = data.get("currency").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+        if total_balance.is_some() || charge_balance.is_some() || granted_balance.is_some() {
             Ok(BalanceResult {
                 account_type: "payg".to_string(),
                 plan_name: None,
-                total_balance: d.balance,
-                charge_balance: d.charge_balance,
-                granted_balance: d.granted_balance,
-                currency: d.currency.or(Some("CNY".to_string())),
+                total_balance,
+                charge_balance,
+                granted_balance,
+                currency: currency.or(Some("CNY".to_string())),
                 token_balance: None,
                 token_limit: None,
                 token_used: None,
             })
         } else {
-            Err("余额数据为空".to_string())
+            Err("余额响应格式无法识别".to_string())
         }
     }
 
