@@ -293,7 +293,7 @@ function TitleBar({
         onMinimize();
       }}
     >
-      <img className="title-logo" src="/assets/logo.svg" alt="" />
+      <img className="title-logo" src="/logo.svg" alt="" />
       <span className="title-text">MiMo Monitor</span>
       {view === "settings" && <span className="title-sub">设置</span>}
       {view === "usage" && <span className="title-sub">用量</span>}
@@ -331,7 +331,7 @@ function MainView({
       <div className="content">
         <div className="setup-section">
           <div className="setup-icon">
-            <img src="/assets/logo.svg" alt="" />
+            <img src="/logo.svg" alt="" />
           </div>
           <h2 className="setup-title">配置 API Key</h2>
           <p className="setup-desc">
