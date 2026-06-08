@@ -131,33 +131,46 @@ pub fn run() {
 
     // ── 窗口管理 ──
 
-    fn position_near_tray(window: &WebviewWindow) -> tauri::Result<()> {
-        let cursor = window.cursor_position()?;
-        let monitor = window
-            .monitor_from_point(cursor.x, cursor.y)?
-            .or(window.current_monitor()?)
-            .or(window.primary_monitor()?)
-            .ok_or_else(|| tauri::Error::WindowNotFound)?;
-        let work_area = monitor.work_area();
-        let scale_factor = monitor.scale_factor();
-        let size = window.outer_size()?;
+    fn position_near_tray(window: &WebviewWindow) {
+        let size = window.outer_size().unwrap_or(tauri::PhysicalSize::new(356, 600));
+        let scale_factor = window.current_monitor().ok().flatten()
+            .or_else(|| window.primary_monitor().ok().flatten())
+            .map(|m| m.scale_factor())
+            .unwrap_or(1.0);
         let margin = (12.0 * scale_factor).round() as i32;
         let width = size.width as i32;
         let height = size.height as i32;
-        let right = work_area.position.x + work_area.size.width as i32;
-        let bottom = work_area.position.y + work_area.size.height as i32;
-        let x = right - width - margin;
-        let y = bottom - height - margin;
-        window.set_position(Position::Physical(PhysicalPosition::new(
-            x.max(work_area.position.x),
-            y.max(work_area.position.y),
-        )))
+
+        // Try to use cursor position, fall back to primary monitor
+        let work_area = if let Ok(cursor) = window.cursor_position() {
+            window.monitor_from_point(cursor.x, cursor.y)
+                .ok().flatten()
+                .or_else(|| window.primary_monitor().ok().flatten())
+        } else {
+            window.primary_monitor().ok().flatten()
+        };
+
+        if let Some(monitor) = work_area {
+            let area = monitor.work_area();
+            let right = area.position.x + area.size.width as i32;
+            let bottom = area.position.y + area.size.height as i32;
+            let x = right - width - margin;
+            let y = bottom - height - margin;
+            let _ = window.set_position(Position::Physical(PhysicalPosition::new(
+                x.max(area.position.x),
+                y.max(area.position.y),
+            )));
+        }
     }
 
     fn show_main_window(window: &WebviewWindow) {
-        let _ = position_near_tray(window);
-        let _ = window.show();
-        let _ = window.set_focus();
+        position_near_tray(window);
+        if let Err(e) = window.show() {
+            eprintln!("show failed: {e}");
+        }
+        if let Err(e) = window.set_focus() {
+            eprintln!("set_focus failed: {e}");
+        }
     }
 
     #[tauri::command]
